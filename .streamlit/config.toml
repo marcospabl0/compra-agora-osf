@@ -1,0 +1,38 @@
+[global]
+# Configurações gerais do Streamlit
+developmentMode = false
+
+[server]
+# Configurações do servidor
+headless = true
+port = 8501
+enableCORS = false
+enableXsrfProtection = true
+
+[browser]
+# Configurações do navegador
+gatherUsageStats = false
+
+[theme]
+# Tema personalizado para o Compra Agora
+primaryColor = "#1f77b4"
+backgroundColor = "#ffffff"
+secondaryBackgroundColor = "#f0f2f6"
+textColor = "#262730"
+font = "sans serif"
+
+[logger]
+# Configurações de log
+level = "info"
+messageFormat = "%(asctime)s - %(levelname)s - %(message)s"
+
+[client]
+# Configurações do cliente
+showErrorDetails = true
+toolbarMode = "minimal"
+
+[runner]
+# Configurações do runner
+magicEnabled = true
+installTracer = false
+fixMatplotlib = true

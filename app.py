@@ -179,15 +179,26 @@ class StreamlitProductEnhancer(ProductDescriptionEnhancer):
             total_rows = len(df)
             self.streamlit_logger.info(f"Iniciando processamento de {total_rows} produtos...")
             
-            for index, row in df.iterrows():
+            # Usar enumerate para ter controle sequencial do índice
+            for current_index, (original_index, row) in enumerate(df.iterrows()):
                 try:
-                    # Atualizar progresso
-                    if self.progress_bar:
-                        progress = (index + 1) / total_rows
-                        self.progress_bar.progress(progress)
+                    # Atualizar progresso usando índice sequencial
+                    if self.progress_bar and hasattr(self.progress_bar, 'progress'):
+                        try:
+                            progress = (current_index + 1) / total_rows
+                            # Garantir que o progresso esteja entre 0.0 e 1.0
+                            progress = max(0.0, min(1.0, progress))
+                            self.progress_bar.progress(progress)
+                        except Exception as e:
+                            # Se houver erro no progresso, apenas logar e continuar
+                            self.streamlit_logger.warning(f"Erro ao atualizar progresso: {str(e)}")
                     
-                    if self.status_text:
-                        self.status_text.text(f"Processando produto {index + 1}/{total_rows}")
+                    if self.status_text and hasattr(self.status_text, 'text'):
+                        try:
+                            self.status_text.text(f"Processando produto {current_index + 1}/{total_rows}")
+                        except Exception as e:
+                            # Se houver erro no status, apenas logar e continuar
+                            self.streamlit_logger.warning(f"Erro ao atualizar status: {str(e)}")
                     
                     # Criar objeto do produto
                     product = self.create_product_info(row, default_mapping)
@@ -197,51 +208,51 @@ class StreamlitProductEnhancer(ProductDescriptionEnhancer):
                     description_length = len(product.description)
                     ratio = description_length / title_length if title_length > 0 else 0
                     
-                    df.at[index, 'Razão_Título_Descrição'] = f"{ratio:.2f}"
+                    df.at[original_index, 'Razão_Título_Descrição'] = f"{ratio:.2f}"
                     
                     # Verificar se deve melhorar
                     should_enhance, motivo = self.should_enhance_description(product.title, product.description)
-                    df.at[index, 'Motivo_Melhoria'] = motivo
+                    df.at[original_index, 'Motivo_Melhoria'] = motivo
                     
                     if should_enhance:
-                        self.streamlit_logger.info(f"Melhorando produto {index + 1}: {product.title[:50]}...")
+                        self.streamlit_logger.info(f"Melhorando produto {current_index + 1}: {product.title[:50]}...")
                         
                         # Gerar conteúdo SEO completo
                         seo_info = self.ai_provider.generate_seo_content(product, self.config)
                         
                         # Atualizar DataFrame
-                        df.at[index, 'Descrição_Melhorada'] = seo_info.enhanced_description
-                        df.at[index, 'Meta_Title'] = seo_info.meta_title
-                        df.at[index, 'Meta_Description'] = seo_info.meta_description
-                        df.at[index, 'Status_Melhoria'] = 'MELHORADO'
+                        df.at[original_index, 'Descrição_Melhorada'] = seo_info.enhanced_description
+                        df.at[original_index, 'Meta_Title'] = seo_info.meta_title
+                        df.at[original_index, 'Meta_Description'] = seo_info.meta_description
+                        df.at[original_index, 'Status_Melhoria'] = 'MELHORADO'
                         
                         self.stats['enhanced'] += 1
                         
                     else:
-                        self.streamlit_logger.info(f"Mantendo produto {index + 1}: {product.title[:50]}...")
+                        self.streamlit_logger.info(f"Mantendo produto {current_index + 1}: {product.title[:50]}...")
                         
                         # Gerar apenas meta tags
                         seo_info = self.ai_provider.generate_seo_content(product, self.config)
                         
-                        df.at[index, 'Descrição_Melhorada'] = product.description
-                        df.at[index, 'Meta_Title'] = seo_info.meta_title
-                        df.at[index, 'Meta_Description'] = seo_info.meta_description
-                        df.at[index, 'Status_Melhoria'] = 'MANTIDO'
+                        df.at[original_index, 'Descrição_Melhorada'] = product.description
+                        df.at[original_index, 'Meta_Title'] = seo_info.meta_title
+                        df.at[original_index, 'Meta_Description'] = seo_info.meta_description
+                        df.at[original_index, 'Status_Melhoria'] = 'MANTIDO'
                         
                         self.stats['skipped'] += 1
                     
                     self.stats['total_processed'] += 1
                     
                     # Log de progresso a cada 5 produtos
-                    if (index + 1) % 5 == 0:
-                        self.streamlit_logger.info(f"Progresso: {index + 1}/{total_rows} produtos processados")
+                    if (current_index + 1) % 5 == 0:
+                        self.streamlit_logger.info(f"Progresso: {current_index + 1}/{total_rows} produtos processados")
                 
                 except Exception as e:
-                    self.streamlit_logger.error(f"Erro ao processar linha {index + 1}: {str(e)}")
-                    df.at[index, 'Status_Melhoria'] = 'ERRO'
-                    df.at[index, 'Descrição_Melhorada'] = product.description if 'product' in locals() else ''
-                    df.at[index, 'Meta_Title'] = ''
-                    df.at[index, 'Meta_Description'] = ''
+                    self.streamlit_logger.error(f"Erro ao processar linha {current_index + 1}: {str(e)}")
+                    df.at[original_index, 'Status_Melhoria'] = 'ERRO'
+                    df.at[original_index, 'Descrição_Melhorada'] = product.description if 'product' in locals() else ''
+                    df.at[original_index, 'Meta_Title'] = ''
+                    df.at[original_index, 'Meta_Description'] = ''
                     self.stats['errors'] += 1
             
             # Estatísticas finais
@@ -473,6 +484,103 @@ def main():
         else:
             st.success("✅ Pronto para processar")
 
+def processar_lote_simples(lote: pd.DataFrame, ai_provider, min_ratio: float, config: Dict[str, Any], 
+                          streamlit_logger: StreamlitLogger, numero_lote: int, total_lotes: int) -> pd.DataFrame:
+    """
+    Processa um lote sem usar elementos de UI do Streamlit para evitar conflitos.
+    """
+    try:
+        # Mapeamento padrão de colunas
+        default_mapping = {
+            'title': 'Título',
+            'description': 'Descrição', 
+            'price': 'Preço',
+            'sku': 'SKU',
+            'category': 'Categoria',
+            'brand': 'Marca'
+        }
+        
+        # Adicionar colunas de resultado
+        lote['Descrição_Melhorada'] = ''
+        lote['Status_Melhoria'] = ''
+        lote['Motivo_Melhoria'] = ''
+        lote['Razão_Título_Descrição'] = ''
+        lote['Meta_Title'] = ''
+        lote['Meta_Description'] = ''
+        
+        # Processar cada linha
+        total_rows = len(lote)
+        streamlit_logger.info(f"Processando lote {numero_lote}/{total_lotes}: {total_rows} produtos")
+        
+        for current_index, (original_index, row) in enumerate(lote.iterrows()):
+            try:
+                # Criar objeto do produto
+                product = ProductInfo(
+                    title=str(row.get(default_mapping.get('title', 'title'), '')).strip(),
+                    description=str(row.get(default_mapping.get('description', 'description'), '')).strip(),
+                    price=str(row.get(default_mapping.get('price', 'price'), '')).strip(),
+                    sku=str(row.get(default_mapping.get('sku', 'sku'), '')).strip(),
+                    category=str(row.get(default_mapping.get('category', 'category'), '')).strip(),
+                    brand=str(row.get(default_mapping.get('brand', 'brand'), '')).strip()
+                )
+                
+                # Calcular razão título/descrição
+                title_length = len(product.title)
+                description_length = len(product.description)
+                ratio = description_length / title_length if title_length > 0 else 0
+                
+                lote.at[original_index, 'Razão_Título_Descrição'] = f"{ratio:.2f}"
+                
+                # Verificar se deve melhorar
+                should_enhance, motivo = True, "Sempre melhorar com base no retorno da IA"
+                lote.at[original_index, 'Motivo_Melhoria'] = motivo
+                
+                if should_enhance:
+                    streamlit_logger.info(f"Lote {numero_lote} - Melhorando produto {current_index + 1}: {product.title[:50]}...")
+                    
+                    # Gerar conteúdo SEO completo
+                    seo_info = ai_provider.generate_seo_content(product, config)
+                    
+                    # Atualizar DataFrame
+                    lote.at[original_index, 'Descrição_Melhorada'] = seo_info.enhanced_description
+                    lote.at[original_index, 'Meta_Title'] = seo_info.meta_title
+                    lote.at[original_index, 'Meta_Description'] = seo_info.meta_description
+                    lote.at[original_index, 'Status_Melhoria'] = 'MELHORADO'
+                    
+                else:
+                    streamlit_logger.info(f"Lote {numero_lote} - Mantendo produto {current_index + 1}: {product.title[:50]}...")
+                    
+                    # Gerar apenas meta tags
+                    seo_info = ai_provider.generate_seo_content(product, config)
+                    
+                    lote.at[original_index, 'Descrição_Melhorada'] = product.description
+                    lote.at[original_index, 'Meta_Title'] = seo_info.meta_title
+                    lote.at[original_index, 'Meta_Description'] = seo_info.meta_description
+                    lote.at[original_index, 'Status_Melhoria'] = 'MANTIDO'
+                
+                # Log de progresso a cada 5 produtos
+                if (current_index + 1) % 5 == 0:
+                    streamlit_logger.info(f"Lote {numero_lote} - Progresso: {current_index + 1}/{total_rows} produtos processados")
+            
+            except Exception as e:
+                streamlit_logger.error(f"Lote {numero_lote} - Erro ao processar linha {current_index + 1}: {str(e)}")
+                lote.at[original_index, 'Status_Melhoria'] = 'ERRO'
+                lote.at[original_index, 'Descrição_Melhorada'] = product.description if 'product' in locals() else ''
+                lote.at[original_index, 'Meta_Title'] = ''
+                lote.at[original_index, 'Meta_Description'] = ''
+        
+        streamlit_logger.info(f"Lote {numero_lote} concluído com sucesso!")
+        return lote
+        
+    except Exception as e:
+        streamlit_logger.error(f"Erro ao processar lote {numero_lote}: {str(e)}")
+        # Retornar lote com erro
+        lote['Status_Melhoria'] = 'ERRO'
+        lote['Descrição_Melhorada'] = lote['Descrição']
+        lote['Meta_Title'] = ''
+        lote['Meta_Description'] = ''
+        return lote
+
 def dividir_em_lotes(df: pd.DataFrame, tamanho_lote: int = 100):
     """
     Divide um DataFrame em lotes menores.
@@ -560,15 +668,24 @@ def process_file_in_batches(df: pd.DataFrame, provider: str, api_key: str, model
             # Criar melhorador para este lote
             enhancer = StreamlitProductEnhancer(ai_provider, min_ratio, config, streamlit_logger)
             
-            # Área de progresso do lote
+            # Área de progresso do lote (criar novos elementos para cada lote)
             progress_bar = st.progress(0)
             status_text = st.empty()
             enhancer.set_progress_elements(progress_bar, status_text)
             
+            # Limpar estado anterior do enhancer
+            enhancer.stats = {
+                'total_processed': 0,
+                'enhanced': 0,
+                'skipped': 0,
+                'errors': 0
+            }
+            
             # Processar lote com timeout interno
             try:
                 with st.spinner(f"Processando lote {i}... (Tempo restante: ~{tempo_restante_estimado/60:.1f} min)"):
-                    lote_resultado = enhancer.process_excel_file_streamlit(lote)
+                    # Processar lote usando método mais simples para evitar conflitos de UI
+                    lote_resultado = processar_lote_simples(lote, ai_provider, min_ratio, config, streamlit_logger, i, total_lotes)
                     resultados.append(lote_resultado)
                 
                 st.success(f"✅ Lote {i} concluído! {len(lote_resultado)} produtos processados")
@@ -578,6 +695,9 @@ def process_file_in_batches(df: pd.DataFrame, provider: str, api_key: str, model
                     pausa = 3 if tamanho_lote <= 25 else 5  # Pausa menor para lotes pequenos
                     st.info(f"⏳ Aguardando {pausa} segundos antes do próximo lote...")
                     time.sleep(pausa)
+                    
+                    # Limpar elementos de UI para evitar conflitos
+                    st.empty()
                     
             except Exception as e:
                 st.error(f"❌ Erro no lote {i}: {str(e)}")

@@ -378,23 +378,44 @@ def main():
                 st.success(f"✅ Arquivo carregado com sucesso! {total_produtos} produtos encontrados.")
                 
                 # Verificar se é um arquivo grande
-                if total_produtos > 100:
+                if total_produtos > 50:
                     st.warning(f"⚠️ Arquivo grande detectado: {total_produtos} produtos")
-                    st.info("💡 Para evitar timeouts no Streamlit Cloud, recomendamos processar em lotes de 100 produtos")
+                    
+                    # Calcular lotes otimizados baseado no tamanho
+                    if total_produtos <= 200:
+                        tamanho_lote_recomendado = 50
+                        tempo_estimado = total_produtos * 0.3  # 0.3 min por produto
+                    elif total_produtos <= 500:
+                        tamanho_lote_recomendado = 50
+                        tempo_estimado = total_produtos * 0.3
+                    else:  # 500+ produtos
+                        tamanho_lote_recomendado = 25
+                        tempo_estimado = total_produtos * 0.4
+                    
+                    lotes_necessarios = (total_produtos + tamanho_lote_recomendado - 1) // tamanho_lote_recomendado
+                    
+                    st.info(f"💡 Recomendamos processar em lotes de {tamanho_lote_recomendado} produtos")
+                    st.info(f"📊 Serão necessários {lotes_necessarios} lotes")
+                    st.info(f"⏱️ Tempo estimado: {tempo_estimado:.0f} minutos")
                     
                     # Opções de processamento
-                    col1, col2 = st.columns(2)
+                    col1, col2, col3 = st.columns(3)
                     
                     with col1:
-                        processar_lotes = st.button("📦 Processar em Lotes (Recomendado)", type="primary")
+                        processar_lotes_pequenos = st.button(f"📦 Lotes de {tamanho_lote_recomendado} (Recomendado)", type="primary")
                     
                     with col2:
-                        processar_tudo = st.button("⚡ Processar Tudo (Risco de Timeout)", type="secondary")
+                        processar_lotes_100 = st.button("📦 Lotes de 100 (Mais Rápido)", type="secondary")
                     
-                    if processar_lotes:
-                        process_file_in_batches(df, provider, api_key, model, min_ratio, prohibited_phrases, min_chars, max_chars)
+                    with col3:
+                        processar_tudo = st.button("⚡ Processar Tudo (Risco Alto)", type="secondary")
+                    
+                    if processar_lotes_pequenos:
+                        process_file_in_batches(df, provider, api_key, model, min_ratio, prohibited_phrases, min_chars, max_chars, tamanho_lote_recomendado)
+                    elif processar_lotes_100:
+                        process_file_in_batches(df, provider, api_key, model, min_ratio, prohibited_phrases, min_chars, max_chars, 100)
                     elif processar_tudo:
-                        st.warning("⚠️ Processando todos os produtos de uma vez. Risco de timeout!")
+                        st.warning("⚠️ Processando todos os produtos de uma vez. Risco muito alto de timeout!")
                         process_file(df, provider, api_key, model, min_ratio, prohibited_phrases, min_chars, max_chars)
                 else:
                     # Arquivo pequeno, processar normalmente
@@ -473,9 +494,9 @@ def dividir_em_lotes(df: pd.DataFrame, tamanho_lote: int = 100):
     return lotes
 
 def process_file_in_batches(df: pd.DataFrame, provider: str, api_key: str, model: str, 
-                          min_ratio: float, prohibited_phrases: str, min_chars: int, max_chars: int):
+                          min_ratio: float, prohibited_phrases: str, min_chars: int, max_chars: int, tamanho_lote: int = 50):
     """
-    Processa arquivo em lotes para evitar timeouts no Streamlit Cloud.
+    Processa arquivo em lotes otimizados para evitar timeouts no Streamlit Cloud.
     """
     # Configurar estado
     st.session_state.processing = True
@@ -499,26 +520,42 @@ def process_file_in_batches(df: pd.DataFrame, provider: str, api_key: str, model
         else:
             ai_provider = GeminiProvider(api_key, model)
         
-        # Dividir em lotes
-        tamanho_lote = 100
+        # Dividir em lotes otimizados
         lotes = dividir_em_lotes(df, tamanho_lote)
         total_lotes = len(lotes)
         
-        st.header("📦 Processamento em Lotes")
+        st.header("📦 Processamento em Lotes Otimizado")
         st.info(f"📊 Arquivo dividido em {total_lotes} lotes de {tamanho_lote} produtos cada")
+        
+        # Calcular tempo estimado mais preciso
+        tempo_por_produto = 0.2 if provider == "openai" and model == "gpt-3.5-turbo" else 0.4
+        tempo_estimado_total = len(df) * tempo_por_produto
+        
+        st.info(f"⏱️ Tempo estimado total: {tempo_estimado_total:.0f} minutos")
+        st.info(f"🚀 Usando modelo: {model} ({provider})")
         
         # Mostrar informações dos lotes
         with st.expander("📋 Informações dos Lotes"):
             for i, lote in enumerate(lotes, 1):
                 inicio = lote.index[0] + 1
                 fim = lote.index[-1] + 1
-                st.write(f"**Lote {i}**: Produtos {inicio} a {fim} ({len(lote)} produtos)")
+                tempo_lote = len(lote) * tempo_por_produto
+                st.write(f"**Lote {i}**: Produtos {inicio} a {fim} ({len(lote)} produtos) - ~{tempo_lote:.1f} min")
         
-        # Processar cada lote
+        # Processar cada lote com melhor controle de timeout
         resultados = []
+        tempo_inicio_total = time.time()
         
         for i, lote in enumerate(lotes, 1):
             st.subheader(f"🔄 Processando Lote {i}/{total_lotes}")
+            
+            # Verificar tempo restante (Streamlit Cloud tem limite de 10 min)
+            tempo_decorrido = time.time() - tempo_inicio_total
+            tempo_restante_estimado = (total_lotes - i + 1) * len(lote) * tempo_por_produto * 60
+            
+            if tempo_decorrido > 480:  # 8 minutos (deixar margem de 2 min)
+                st.error("⚠️ Tempo limite próximo! Salvando progresso atual...")
+                break
             
             # Criar melhorador para este lote
             enhancer = StreamlitProductEnhancer(ai_provider, min_ratio, config, streamlit_logger)
@@ -528,89 +565,105 @@ def process_file_in_batches(df: pd.DataFrame, provider: str, api_key: str, model
             status_text = st.empty()
             enhancer.set_progress_elements(progress_bar, status_text)
             
-            # Processar lote
-            with st.spinner(f"Processando lote {i}..."):
-                lote_resultado = enhancer.process_excel_file_streamlit(lote)
-                resultados.append(lote_resultado)
-            
-            st.success(f"✅ Lote {i} concluído! {len(lote_resultado)} produtos processados")
-            
-            # Pausa entre lotes para evitar rate limits
-            if i < total_lotes:
-                st.info("⏳ Aguardando 5 segundos antes do próximo lote...")
-                time.sleep(5)
+            # Processar lote com timeout interno
+            try:
+                with st.spinner(f"Processando lote {i}... (Tempo restante: ~{tempo_restante_estimado/60:.1f} min)"):
+                    lote_resultado = enhancer.process_excel_file_streamlit(lote)
+                    resultados.append(lote_resultado)
+                
+                st.success(f"✅ Lote {i} concluído! {len(lote_resultado)} produtos processados")
+                
+                # Pausa otimizada entre lotes
+                if i < total_lotes:
+                    pausa = 3 if tamanho_lote <= 25 else 5  # Pausa menor para lotes pequenos
+                    st.info(f"⏳ Aguardando {pausa} segundos antes do próximo lote...")
+                    time.sleep(pausa)
+                    
+            except Exception as e:
+                st.error(f"❌ Erro no lote {i}: {str(e)}")
+                st.warning("⚠️ Continuando com o próximo lote...")
+                # Adicionar lote com erro para manter a estrutura
+                lote_erro = lote.copy()
+                lote_erro['Status_Melhoria'] = 'ERRO'
+                lote_erro['Descrição_Melhorada'] = lote_erro['Descrição']
+                lote_erro['Meta_Title'] = ''
+                lote_erro['Meta_Description'] = ''
+                resultados.append(lote_erro)
         
         # Combinar resultados
-        st.subheader("📋 Combinando Resultados")
-        resultado_final = pd.concat(resultados, ignore_index=True)
-        
-        st.success(f"🎉 Processamento concluído! {len(resultado_final)} produtos processados")
-        
-        # Mostrar estatísticas finais
-        st.header("📊 Estatísticas Finais")
-        
-        col1, col2, col3, col4 = st.columns(4)
-        
-        with col1:
-            st.metric("Total Processado", len(resultado_final))
-        
-        with col2:
-            melhorados = len(resultado_final[resultado_final['Status_Melhoria'] == 'MELHORADO'])
-            st.metric("Melhorados", melhorados)
-        
-        with col3:
-            mantidos = len(resultado_final[resultado_final['Status_Melhoria'] == 'MANTIDO'])
-            st.metric("Mantidos", mantidos)
-        
-        with col4:
-            erros = len(resultado_final[resultado_final['Status_Melhoria'] == 'ERRO'])
-            st.metric("Erros", erros)
-        
-        # Mostrar resultados
-        st.header("📋 Resultados")
-        
-        # Filtros para visualização
-        col1, col2 = st.columns(2)
-        
-        with col1:
-            status_filter = st.selectbox(
-                "Filtrar por status",
-                ["Todos", "MELHORADO", "MANTIDO", "ERRO"]
+        if resultados:
+            st.subheader("📋 Combinando Resultados")
+            resultado_final = pd.concat(resultados, ignore_index=True)
+            
+            st.success(f"🎉 Processamento concluído! {len(resultado_final)} produtos processados")
+            
+            # Mostrar estatísticas finais
+            st.header("📊 Estatísticas Finais")
+            
+            col1, col2, col3, col4 = st.columns(4)
+            
+            with col1:
+                st.metric("Total Processado", len(resultado_final))
+            
+            with col2:
+                melhorados = len(resultado_final[resultado_final['Status_Melhoria'] == 'MELHORADO'])
+                st.metric("Melhorados", melhorados)
+            
+            with col3:
+                mantidos = len(resultado_final[resultado_final['Status_Melhoria'] == 'MANTIDO'])
+                st.metric("Mantidos", mantidos)
+            
+            with col4:
+                erros = len(resultado_final[resultado_final['Status_Melhoria'] == 'ERRO'])
+                st.metric("Erros", erros)
+            
+            # Mostrar resultados
+            st.header("📋 Resultados")
+            
+            # Filtros para visualização
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                status_filter = st.selectbox(
+                    "Filtrar por status",
+                    ["Todos", "MELHORADO", "MANTIDO", "ERRO"]
+                )
+            
+            with col2:
+                show_columns = st.multiselect(
+                    "Colunas para mostrar",
+                    ["Título", "Descrição", "Descrição_Melhorada", "Meta_Title", "Meta_Description", "Status_Melhoria"],
+                    default=["Título", "Descrição_Melhorada", "Meta_Title", "Meta_Description", "Status_Melhoria"]
+                )
+            
+            # Aplicar filtros
+            if status_filter != "Todos":
+                filtered_df = resultado_final[resultado_final['Status_Melhoria'] == status_filter]
+            else:
+                filtered_df = resultado_final
+            
+            # Mostrar tabela
+            if show_columns:
+                st.dataframe(filtered_df[show_columns], use_container_width=True)
+            
+            # Botão para download
+            st.header("💾 Download dos Resultados")
+            
+            # Criar arquivo Excel em memória
+            output = io.BytesIO()
+            with pd.ExcelWriter(output, engine='openpyxl') as writer:
+                resultado_final.to_excel(writer, index=False, sheet_name='Resultados')
+            
+            output.seek(0)
+            
+            st.download_button(
+                label="📥 Baixar Arquivo Processado",
+                data=output.getvalue(),
+                file_name=f"produtos_melhorados_lotes_{int(time.time())}.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
             )
-        
-        with col2:
-            show_columns = st.multiselect(
-                "Colunas para mostrar",
-                ["Título", "Descrição", "Descrição_Melhorada", "Meta_Title", "Meta_Description", "Status_Melhoria"],
-                default=["Título", "Descrição_Melhorada", "Meta_Title", "Meta_Description", "Status_Melhoria"]
-            )
-        
-        # Aplicar filtros
-        if status_filter != "Todos":
-            filtered_df = resultado_final[resultado_final['Status_Melhoria'] == status_filter]
         else:
-            filtered_df = resultado_final
-        
-        # Mostrar tabela
-        if show_columns:
-            st.dataframe(filtered_df[show_columns], use_container_width=True)
-        
-        # Botão para download
-        st.header("💾 Download dos Resultados")
-        
-        # Criar arquivo Excel em memória
-        output = io.BytesIO()
-        with pd.ExcelWriter(output, engine='openpyxl') as writer:
-            resultado_final.to_excel(writer, index=False, sheet_name='Resultados')
-        
-        output.seek(0)
-        
-        st.download_button(
-            label="📥 Baixar Arquivo Processado",
-            data=output.getvalue(),
-            file_name=f"produtos_melhorados_lotes_{int(time.time())}.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-        )
+            st.error("❌ Nenhum lote foi processado com sucesso.")
         
     except Exception as e:
         st.error(f"❌ Erro durante o processamento em lotes: {str(e)}")

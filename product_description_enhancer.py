@@ -179,19 +179,47 @@ def clean_markdown_formatting(text: str) -> str:
     
     return cleaned_text
 
-def filter_prohibited_content(description: str, prohibited_phrases: List[str] = None) -> str:
+def filter_prohibited_content(description: str, prohibited_phrases: List[str] = None, config: Dict[str, Any] = None) -> str:
     """
     Remove ou substitui frases/palavras proibidas da descrição.
+    Versão melhorada que substitui por alternativas ao invés de apenas remover.
     
     Args:
         description: Descrição a ser filtrada
         prohibited_phrases: Lista de frases/palavras proibidas
+        config: Configuração opcional com dicionário de substituições personalizado
         
     Returns:
         Descrição filtrada
     """
     if not description or not prohibited_phrases:
         return description
+    
+    # Mapeamento padrão de substituições inteligentes
+    # Ordem importa: frases completas primeiro, depois palavras individuais
+    default_substitutions = {
+        # Frases completas (aplicar primeiro para evitar substituições parciais)
+        'margem de lucro': 'rentabilidade',
+        'pequenos clientes': 'clientes',
+        'clientes frescos': 'clientes',
+        'Delicie seus clientes': 'Satisfaça seus clientes',
+        
+        # Palavras individuais
+        'mercadinho': 'estabelecimento',
+        'validade': 'prazo de validade',  # Mais específico que "durabilidade"
+        'faturamento': 'receita',
+        'estoque': 'disponibilidade',  # Mais adequado que "produtos" para e-commerce
+        'margem': 'rentabilidade',
+        'lucro': 'rentabilidade',
+    }
+    
+    # Permitir override via config.json
+    if config and 'substitution_mapping' in config:
+        # Mesclar substituições do config com as padrões
+        # Config tem prioridade sobre padrões
+        substitutions = {**default_substitutions, **config['substitution_mapping']}
+    else:
+        substitutions = default_substitutions
     
     filtered_desc = description
     
@@ -214,10 +242,20 @@ def filter_prohibited_content(description: str, prohibited_phrases: List[str] = 
     # Combinar listas
     all_prohibited = list(set(default_prohibited + (prohibited_phrases or [])))
     
-    # Remover frases proibidas (case insensitive)
+    # Aplicar substituições inteligentes primeiro
+    # Ordenar por tamanho (mais longas primeiro) para evitar substituições parciais
+    sorted_substitutions = sorted(substitutions.items(), key=lambda x: len(x[0]), reverse=True)
+    
+    for prohibited, replacement in sorted_substitutions:
+        if prohibited in all_prohibited:
+            pattern = re.compile(re.escape(prohibited), re.IGNORECASE)
+            filtered_desc = pattern.sub(replacement, filtered_desc)
+    
+    # Para palavras não mapeadas, remover com cuidado
     for phrase in all_prohibited:
-        pattern = re.compile(re.escape(phrase), re.IGNORECASE)
-        filtered_desc = pattern.sub('', filtered_desc)
+        if phrase not in substitutions:
+            pattern = re.compile(re.escape(phrase), re.IGNORECASE)
+            filtered_desc = pattern.sub('', filtered_desc)
     
     # Limpar espaços extras e pontuação órfã
     filtered_desc = re.sub(r'\s+', ' ', filtered_desc)
@@ -226,6 +264,55 @@ def filter_prohibited_content(description: str, prohibited_phrases: List[str] = 
     filtered_desc = filtered_desc.strip()
     
     return filtered_desc
+
+def remove_caixaria_numbers(description: str) -> str:
+    """
+    Remove números de caixaria das descrições.
+    Exemplo: "Caixa com 1" → "Caixa"
+    Exemplo: "Otimize a gestão do seu estabelecimento com a Caixa com 1" → "Otimize a gestão do seu estabelecimento com a Caixa"
+    
+    Args:
+        description: Descrição a ser limpa
+        
+    Returns:
+        Descrição sem números de caixaria
+    """
+    if not description:
+        return description
+    
+    cleaned_desc = description
+    
+    # Padrão 1: "Caixa com [número]" ou "caixa com [número]" (case insensitive)
+    # Substitui por apenas "Caixa" ou "caixa" (mantém capitalização original)
+    pattern1 = r'\b([Cc]aixa|[Ee]mbalagem|[Pp]ack|[Kk]it|[Cc]onjunto|[Ss]et)\s+com\s+\d+\b'
+    def replace_caixa(match):
+        word = match.group(1)
+        # Manter capitalização: se começa com maiúscula, manter maiúscula
+        return word
+    
+    cleaned_desc = re.sub(pattern1, replace_caixa, cleaned_desc)
+    
+    # Padrão 2: "com [número]" quando aparece após "a", "o", "da", "do", etc. + palavra relacionada a caixa
+    # Exemplo: "com a Caixa com 1" → "com a Caixa"
+    pattern2 = r'\b([a-záàâãéêíóôõúç]+)\s+(caixa|embalagem|pack|kit|conjunto|set)\s+com\s+\d+\b'
+    def replace_with_article(match):
+        article = match.group(1)
+        item = match.group(2)
+        return f"{article} {item}"
+    
+    cleaned_desc = re.sub(pattern2, replace_with_article, cleaned_desc, flags=re.IGNORECASE)
+    
+    # Padrão 3: "com [número]" no final de frases (mais genérico, mas apenas se não for parte de outra palavra)
+    # Exemplo: "... com a Caixa com 1" → "... com a Caixa"
+    pattern3 = r'\s+com\s+(\d+)\b(?=\s*[.!?]?\s*$)'
+    cleaned_desc = re.sub(pattern3, '', cleaned_desc)
+    
+    # Limpar espaços extras e pontuação órfã
+    cleaned_desc = re.sub(r'\s+', ' ', cleaned_desc)
+    cleaned_desc = re.sub(r'\s*[,;.!?]\s*[,;.!?]+', '.', cleaned_desc)
+    cleaned_desc = cleaned_desc.strip()
+    
+    return cleaned_desc
 
 class AIProvider:
     """Classe base para provedores de IA."""
@@ -262,7 +349,7 @@ class OpenAIProvider(AIProvider):
                 response = client.chat.completions.create(
                     model=self.model,
                     messages=[
-                        {"role": "system", "content": "Você é um especialista em marketing de produtos. Sua tarefa é criar descrições de produtos detalhadas, atrativas e persuasivas que ajudem na conversão de vendas."},
+                        {"role": "system", "content": "Você é um especialista em marketing de produtos e redator profissional em português brasileiro (PT-BR). Sua tarefa é criar descrições de produtos detalhadas, atrativas e persuasivas que ajudem na conversão de vendas. IMPORTANTE: Você DEVE escrever APENAS em português brasileiro correto, com gramática e concordância perfeitas."},
                         {"role": "user", "content": prompt}
                     ],
                     max_tokens=500,
@@ -292,7 +379,7 @@ class OpenAIProvider(AIProvider):
                 response = client.chat.completions.create(
                     model=self.model,
                     messages=[
-                        {"role": "system", "content": "Você é um especialista em SEO para e-commerce. Sua tarefa é criar Meta Title e Meta Description otimizados para produtos."},
+                        {"role": "system", "content": "Você é um especialista em SEO para e-commerce e redator profissional em português brasileiro (PT-BR). Sua tarefa é criar Meta Title e Meta Description otimizados para produtos. IMPORTANTE: Você DEVE escrever APENAS em português brasileiro correto, com gramática e concordância perfeitas."},
                         {"role": "user", "content": prompt}
                     ],
                     max_tokens=300,
@@ -352,7 +439,17 @@ INSTRUÇÕES:
 5. Use tom profissional mas acessível
 6. Evite repetir o título
 7. Foque em converter o varejista em comprador
-8. IMPORTANTE: Retorne APENAS texto limpo, sem formatação Markdown (sem **, *, _, #, etc.){prohibited_text}
+8. CRÍTICO: NÃO inclua números de caixaria nas descrições (ex: "Caixa com 1", "com 2", etc.). Use apenas "Caixa", "embalagem", etc. sem mencionar quantidades de caixaria.
+9. GRAMÁTICA E CONCORDÂNCIA (PT-BR):
+   • OBRIGATÓRIO: Use português brasileiro correto com concordância perfeita
+   • Verbo deve concordar com o sujeito (ex: "Os produtos são" não "Os produtos é")
+   • Adjetivos devem concordar em gênero e número (ex: "produtos populares" não "produtos popular")
+   • Artigos devem concordar (ex: "a embalagem" não "o embalagem")
+   • Evite gerundismo desnecessário (prefira "vai ajudar" a "vai estar ajudando")
+   • Use "você" e não "tu" (padrão brasileiro)
+   • Exemplos CORRETOS: "Este produto é ideal", "As embalagens são práticas", "O cliente vai gostar"
+   • Exemplos INCORRETOS: "Este produto são ideal", "As embalagens é práticas", "O cliente vão gostar"
+10. IMPORTANTE: Retorne APENAS texto limpo, sem formatação Markdown (sem **, *, _, #, etc.){prohibited_text}
 
 Descrição melhorada:"""
         return prompt
@@ -396,6 +493,8 @@ META DESCRIPTION:
 • Ser persuasivo e atrativo para conversão
 • Não duplicar descriptions em várias páginas
 • IMPORTANTE: Focar no produto em si, não em especificações técnicas como volume ou embalagem
+• CRÍTICO: NÃO inclua números de caixaria (ex: "Caixa com 1", "com 2", etc.). Use apenas "Caixa", "embalagem", etc. sem mencionar quantidades de caixaria
+• GRAMÁTICA E CONCORDÂNCIA (PT-BR): Use português brasileiro correto com concordância perfeita. Verbo deve concordar com sujeito, adjetivos com substantivos, artigos corretos. Exemplos CORRETOS: "Este produto é ideal", "As embalagens são práticas". Exemplos INCORRETOS: "Este produto são ideal", "As embalagens é práticas"
 • CRÍTICO: Varie a estrutura - nem sempre comece com o nome do produto
 • CRÍTICO: A palavra-chave deve fluir naturalmente no texto, como se fosse escrita por um humano
 • CRÍTICO: Gere SEMPRE o texto COMPLETO dentro do limite de 160 caracteres - NUNCA corte no meio
@@ -445,6 +544,9 @@ META DESCRIPTION: [descrição aqui]"""
                 # NÃO CORTAR - usar fallback que gera texto completo
                 logger.warning(f"Meta Description muito longa ({len(meta_description)} chars) - usando fallback")
                 meta_description = self._generate_fallback_meta_description(product)
+            
+            # Remover números de caixaria das meta descriptions
+            meta_description = remove_caixaria_numbers(meta_description)
             
             return meta_title, meta_description
             
@@ -578,7 +680,17 @@ Instruções:
 4. Inclua informações práticas sobre uso/benefícios
 5. Evite repetir o título
 6. Foque em converter visitantes em compradores
-7. IMPORTANTE: Retorne APENAS texto limpo, sem formatação Markdown (sem **, *, _, #, etc.){prohibited_text}
+7. CRÍTICO: NÃO inclua números de caixaria nas descrições (ex: "Caixa com 1", "com 2", etc.). Use apenas "Caixa", "embalagem", etc. sem mencionar quantidades de caixaria.
+8. GRAMÁTICA E CONCORDÂNCIA (PT-BR):
+   • OBRIGATÓRIO: Use português brasileiro correto com concordância perfeita
+   • Verbo deve concordar com o sujeito (ex: "Os produtos são" não "Os produtos é")
+   • Adjetivos devem concordar em gênero e número (ex: "produtos populares" não "produtos popular")
+   • Artigos devem concordar (ex: "a embalagem" não "o embalagem")
+   • Evite gerundismo desnecessário (prefira "vai ajudar" a "vai estar ajudando")
+   • Use "você" e não "tu" (padrão brasileiro)
+   • Exemplos CORRETOS: "Este produto é ideal", "As embalagens são práticas", "O cliente vai gostar"
+   • Exemplos INCORRETOS: "Este produto são ideal", "As embalagens é práticas", "O cliente vão gostar"
+9. IMPORTANTE: Retorne APENAS texto limpo, sem formatação Markdown (sem **, *, _, #, etc.){prohibited_text}
 
 Descrição melhorada:"""
         return prompt
@@ -622,6 +734,8 @@ META DESCRIPTION:
 • Ser persuasivo e atrativo para conversão
 • Não duplicar descriptions em várias páginas
 • IMPORTANTE: Focar no produto em si, não em especificações técnicas como volume ou embalagem
+• CRÍTICO: NÃO inclua números de caixaria (ex: "Caixa com 1", "com 2", etc.). Use apenas "Caixa", "embalagem", etc. sem mencionar quantidades de caixaria
+• GRAMÁTICA E CONCORDÂNCIA (PT-BR): Use português brasileiro correto com concordância perfeita. Verbo deve concordar com sujeito, adjetivos com substantivos, artigos corretos. Exemplos CORRETOS: "Este produto é ideal", "As embalagens são práticas". Exemplos INCORRETOS: "Este produto são ideal", "As embalagens é práticas"
 • CRÍTICO: Varie a estrutura - nem sempre comece com o nome do produto
 • CRÍTICO: A palavra-chave deve fluir naturalmente no texto, como se fosse escrita por um humano
 • CRÍTICO: Gere SEMPRE o texto COMPLETO dentro do limite de 160 caracteres - NUNCA corte no meio
@@ -671,6 +785,9 @@ META DESCRIPTION: [descrição aqui]"""
                 # NÃO CORTAR - usar fallback que gera texto completo
                 logger.warning(f"Meta Description muito longa ({len(meta_description)} chars) - usando fallback")
                 meta_description = self._generate_fallback_meta_description(product)
+            
+            # Remover números de caixaria das meta descriptions
+            meta_description = remove_caixaria_numbers(meta_description)
             
             return meta_title, meta_description
             
@@ -917,10 +1034,14 @@ class ProductDescriptionEnhancer:
                         
                         # Filtrar conteúdo proibido (apenas como medida de segurança mínima)
                         # A IA já foi instruída a não usar essas palavras nos prompts
-                        enhanced = filter_prohibited_content(enhanced, self.prohibited_phrases)
+                        enhanced = filter_prohibited_content(enhanced, self.prohibited_phrases, self.config)
                         
-                        # Validar comprimento da descrição
-                        enhanced = ensure_description_length(enhanced)
+                        # Remover números de caixaria (ex: "Caixa com 1" → "Caixa")
+                        enhanced = remove_caixaria_numbers(enhanced)
+                        
+                        # Validar comprimento da descrição usando regras dinâmicas
+                        min_chars, max_chars = get_dynamic_length_limits(product.description, self.config)
+                        enhanced = ensure_description_length(enhanced, min_chars, max_chars)
                         
                         # Atualizar DataFrame com todas as informações
                         df.at[index, 'Descrição_Melhorada'] = enhanced
@@ -1009,18 +1130,18 @@ def get_dynamic_length_limits(original_description: str, config: Dict[str, Any])
     original_length = len(original_description.strip())
     
     # Verificar se usar regras dinâmicas
-    if not config.get("dynamic_rules", False):
-        return config.get("min_chars", 300), config.get("max_chars", 450)
+    if not config.get("description_length", {}).get("dynamic_rules", False):
+        return config.get("description_length", {}).get("min_chars", 300), config.get("description_length", {}).get("max_chars", 450)
     
-    threshold = config.get("short_description", {}).get("threshold", 300)
+    threshold = config.get("description_length", {}).get("short_description", {}).get("threshold", 300)
     
     if original_length < threshold:
-        # Descrição original curta: 300-400 caracteres
-        short_config = config.get("short_description", {})
-        return short_config.get("min_chars", 300), short_config.get("max_chars", 400)
+        # Descrição original curta: usar limites para descrições curtas
+        short_config = config.get("description_length", {}).get("short_description", {})
+        return short_config.get("min_chars", 200), short_config.get("max_chars", 350)
     else:
-        # Descrição original longa: 300-800 caracteres  
-        long_config = config.get("long_description", {})
+        # Descrição original longa: usar limites para descrições longas
+        long_config = config.get("description_length", {}).get("long_description", {})
         return long_config.get("min_chars", 300), long_config.get("max_chars", 800)
 
 def ensure_description_length(description: str, min_chars: int = 300, max_chars: int = 450) -> str:

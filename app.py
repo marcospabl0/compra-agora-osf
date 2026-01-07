@@ -25,9 +25,13 @@ load_dotenv()
 from product_description_enhancer import (
     ProductDescriptionEnhancer, 
     OpenAIProvider, 
-    GeminiProvider,
     ProductInfo,
-    load_config
+    load_config,
+    clean_product_title,
+    filter_prohibited_content,
+    remove_caixaria_numbers,
+    get_dynamic_length_limits,
+    ensure_description_length
 )
 
 # Configurar página
@@ -203,6 +207,9 @@ class StreamlitProductEnhancer(ProductDescriptionEnhancer):
                     # Criar objeto do produto
                     product = self.create_product_info(row, default_mapping)
                     
+                    # Limpar título para melhorar a geração de meta tags (igual ao comando manual)
+                    product.title = clean_product_title(product.title)
+                    
                     # Calcular razão título/descrição
                     title_length = len(product.title)
                     description_length = len(product.description)
@@ -217,11 +224,38 @@ class StreamlitProductEnhancer(ProductDescriptionEnhancer):
                     if should_enhance:
                         self.streamlit_logger.info(f"Melhorando produto {current_index + 1}: {product.title[:50]}...")
                         
-                        # Gerar conteúdo SEO completo
+                        # Gerar conteúdo SEO completo (descrição + meta tags)
                         seo_info = self.ai_provider.generate_seo_content(product, self.config)
                         
-                        # Atualizar DataFrame
-                        df.at[original_index, 'Descrição_Melhorada'] = seo_info.enhanced_description
+                        # Verificar similaridade e tentar retries se necessário (igual ao comando manual)
+                        enhanced = seo_info.enhanced_description or ""
+                        if self._is_too_similar(enhanced, product.description):
+                            self.streamlit_logger.warning("  Descrição melhorada muito similar à original. Tentando nova geração...")
+                            max_retries = 2
+                            for attempt in range(1, max_retries + 1):
+                                time.sleep(0.5)
+                                candidate = self.ai_provider.enhance_description(product, self.config) or ""
+                                if not self._is_too_similar(candidate, product.description):
+                                    enhanced = candidate
+                                    self.streamlit_logger.info(f"  Nova variação aceita na tentativa {attempt}")
+                                    break
+                            else:
+                                # Fallback baseado em regras para garantir mudança
+                                self.streamlit_logger.warning("  Mantida alta similaridade após retries. Aplicando fallback baseado em regras.")
+                                enhanced = self._generate_rule_based_description(product)
+                        
+                        # Filtrar conteúdo proibido (igual ao comando manual)
+                        enhanced = filter_prohibited_content(enhanced, self.prohibited_phrases, self.config)
+                        
+                        # Remover números de caixaria (igual ao comando manual)
+                        enhanced = remove_caixaria_numbers(enhanced)
+                        
+                        # Validar comprimento da descrição usando regras dinâmicas (igual ao comando manual)
+                        min_chars, max_chars = get_dynamic_length_limits(product.description, self.config)
+                        enhanced = ensure_description_length(enhanced, min_chars, max_chars)
+                        
+                        # Atualizar DataFrame com todas as informações
+                        df.at[original_index, 'Descrição_Melhorada'] = enhanced
                         df.at[original_index, 'Meta_Title'] = seo_info.meta_title
                         df.at[original_index, 'Meta_Description'] = seo_info.meta_description
                         df.at[original_index, 'Status_Melhoria'] = 'MELHORADO'
@@ -278,57 +312,40 @@ def main():
     with st.sidebar:
         st.header("⚙️ Configurações")
         
-        # Verificar API Keys disponíveis
-        openai_key = os.getenv('OPENAI_API_KEY')
-        gemini_key = os.getenv('GEMINI_API_KEY')
+        # Campo para inserir API Key da OpenAI
+        st.subheader("🔑 OpenAI API Key")
         
-        # Mostrar status das API Keys
-        st.subheader("🔑 Status das API Keys")
+        # Tentar carregar do .env primeiro
+        default_key = os.getenv('OPENAI_API_KEY', '')
         
-        col1, col2 = st.columns(2)
-        with col1:
-            if openai_key:
-                st.success("✅ OpenAI")
-            else:
-                st.error("❌ OpenAI")
-        
-        with col2:
-            if gemini_key:
-                st.success("✅ Gemini")
-            else:
-                st.error("❌ Gemini")
-        
-        # Provedor de IA
-        available_providers = []
-        if openai_key:
-            available_providers.append("openai")
-        if gemini_key:
-            available_providers.append("gemini")
-        
-        if not available_providers:
-            st.error("❌ Nenhuma API Key configurada no arquivo .env")
-            st.info("💡 Configure OPENAI_API_KEY ou GEMINI_API_KEY no arquivo .env")
-            return
-        
-        provider = st.selectbox(
-            "Provedor de IA",
-            available_providers,
-            help="Escolha entre OpenAI GPT ou Google Gemini"
+        api_key = st.text_input(
+            "Insira sua API Key da OpenAI",
+            value=default_key,
+            type="password",
+            help="Você pode inserir a API Key aqui ou configurar no arquivo .env como OPENAI_API_KEY"
         )
         
-        # Obter API Key baseada no provedor selecionado
-        api_key = openai_key if provider == "openai" else gemini_key
+        # Verificar se API Key foi fornecida
+        if not api_key:
+            st.error("❌ API Key da OpenAI é obrigatória")
+            st.info("💡 Insira sua API Key acima ou configure OPENAI_API_KEY no arquivo .env")
+            st.markdown("""
+            **Como obter sua API Key:**
+            1. Acesse https://platform.openai.com/api-keys
+            2. Faça login na sua conta OpenAI
+            3. Crie uma nova API Key
+            4. Cole a chave no campo acima
+            """)
+            st.stop()
+        else:
+            st.success("✅ API Key configurada")
         
-        # Modelo
-        model_options = {
-            "openai": ["gpt-3.5-turbo", "gpt-4", "gpt-4-turbo"],
-            "gemini": ["gemini-pro", "gemini-pro-vision"]
-        }
-        
+        # Modelo OpenAI
         model = st.selectbox(
-            "Modelo",
-            model_options[provider],
-            help="Modelo específico a ser usado"
+            "Modelo OpenAI",
+            ["gpt-3.5-turbo", "gpt-4", "gpt-4-turbo"],
+            index=0,
+            help="Modelo específico da OpenAI a ser usado"
         )
         
         # Razão mínima
@@ -343,19 +360,50 @@ def main():
         
         # Configurações avançadas
         with st.expander("🔧 Configurações Avançadas"):
+            # Carregar configuração padrão
+            config = load_config()
+            prompt_settings = config.get('prompt_settings', {})
+            
+            # Temperature (controle de criatividade)
+            temperature = st.slider(
+                "Temperature (Criatividade)",
+                min_value=0.0,
+                max_value=1.0,
+                value=prompt_settings.get('temperature', 0.7),
+                step=0.1,
+                help="Valores mais altos (0.8-1.0) = mais criativo. Valores mais baixos (0.0-0.3) = mais preciso e consistente"
+            )
+            
+            # Max tokens
+            max_tokens = st.number_input(
+                "Max Tokens (Tamanho máximo da resposta)",
+                min_value=100,
+                max_value=2000,
+                value=prompt_settings.get('max_tokens', 500),
+                step=50,
+                help="Número máximo de tokens na resposta da IA (1 token ≈ 4 caracteres)"
+            )
+            
             # Frases proibidas
+            default_prohibited = "\n".join(config.get('prohibited_phrases', [
+                "margem", "lucro", "margem de lucro", "clientes frescos"
+            ]))
             prohibited_phrases = st.text_area(
                 "Frases proibidas (uma por linha)",
-                value="margem\nlucro\nmargem de lucro\nclientes frescos",
+                value=default_prohibited,
                 help="Frases que não devem aparecer nas descrições geradas"
             )
             
             # Configurações de comprimento
+            desc_length = config.get('description_length', {})
+            short_desc = desc_length.get('short_description', {})
+            long_desc = desc_length.get('long_description', {})
+            
             min_chars = st.number_input(
                 "Mínimo de caracteres",
                 min_value=100,
                 max_value=500,
-                value=300,
+                value=short_desc.get('min_chars', 300),
                 help="Comprimento mínimo da descrição melhorada"
             )
             
@@ -363,9 +411,65 @@ def main():
                 "Máximo de caracteres",
                 min_value=300,
                 max_value=1000,
-                value=450,
+                value=long_desc.get('max_chars', 450),
                 help="Comprimento máximo da descrição melhorada"
             )
+            
+            # Mapeamento de colunas personalizado
+            st.subheader("📋 Mapeamento de Colunas (Opcional)")
+            st.info("💡 Use apenas se seu arquivo Excel tiver nomes de colunas diferentes dos padrões")
+            
+            col_mapping = config.get('column_mapping', {})
+            
+            col_title = st.text_input(
+                "Nome da coluna 'Título'",
+                value=col_mapping.get('title', 'Título'),
+                help="Nome exato da coluna que contém o título do produto"
+            )
+            
+            col_description = st.text_input(
+                "Nome da coluna 'Descrição'",
+                value=col_mapping.get('description', 'Descrição'),
+                help="Nome exato da coluna que contém a descrição do produto"
+            )
+            
+            col_price = st.text_input(
+                "Nome da coluna 'Preço' (opcional)",
+                value=col_mapping.get('price', 'Preço'),
+                help="Nome da coluna de preço (deixe vazio se não houver)"
+            )
+            
+            col_sku = st.text_input(
+                "Nome da coluna 'SKU' (opcional)",
+                value=col_mapping.get('sku', 'SKU'),
+                help="Nome da coluna de SKU (deixe vazio se não houver)"
+            )
+            
+            col_category = st.text_input(
+                "Nome da coluna 'Categoria' (opcional)",
+                value=col_mapping.get('category', 'Categoria'),
+                help="Nome da coluna de categoria (deixe vazio se não houver)"
+            )
+            
+            col_brand = st.text_input(
+                "Nome da coluna 'Marca' (opcional)",
+                value=col_mapping.get('brand', 'Marca'),
+                help="Nome da coluna de marca (deixe vazio se não houver)"
+            )
+            
+            # Criar dicionário de mapeamento
+            column_mapping = {
+                'title': col_title if col_title else 'Título',
+                'description': col_description if col_description else 'Descrição',
+            }
+            if col_price:
+                column_mapping['price'] = col_price
+            if col_sku:
+                column_mapping['sku'] = col_sku
+            if col_category:
+                column_mapping['category'] = col_category
+            if col_brand:
+                column_mapping['brand'] = col_brand
     
     # Área principal
     col1, col2 = st.columns([2, 1])
@@ -422,12 +526,12 @@ def main():
                         processar_tudo = st.button("⚡ Processar Tudo (Risco Alto)", type="secondary")
                     
                     if processar_lotes_pequenos:
-                        process_file_in_batches(df, provider, api_key, model, min_ratio, prohibited_phrases, min_chars, max_chars, tamanho_lote_recomendado)
+                        process_file_in_batches(df, api_key, model, min_ratio, prohibited_phrases, min_chars, max_chars, temperature, max_tokens, column_mapping, tamanho_lote_recomendado)
                     elif processar_lotes_100:
-                        process_file_in_batches(df, provider, api_key, model, min_ratio, prohibited_phrases, min_chars, max_chars, 100)
+                        process_file_in_batches(df, api_key, model, min_ratio, prohibited_phrases, min_chars, max_chars, temperature, max_tokens, column_mapping, 100)
                     elif processar_tudo:
                         st.warning("⚠️ Processando todos os produtos de uma vez. Risco muito alto de timeout!")
-                        process_file(df, provider, api_key, model, min_ratio, prohibited_phrases, min_chars, max_chars)
+                        process_file(df, api_key, model, min_ratio, prohibited_phrases, min_chars, max_chars, temperature, max_tokens, column_mapping)
                 else:
                     # Arquivo pequeno, processar normalmente
                     st.success(f"✅ Arquivo pequeno: {total_produtos} produtos")
@@ -438,7 +542,7 @@ def main():
                     
                     # Botão para processar
                     if st.button("🚀 Processar Arquivo", type="primary"):
-                        process_file(df, provider, api_key, model, min_ratio, prohibited_phrases, min_chars, max_chars)
+                        process_file(df, api_key, model, min_ratio, prohibited_phrases, min_chars, max_chars, temperature, max_tokens, column_mapping)
                 
                 # Verificar colunas necessárias
                 required_columns = ['Título', 'Descrição']
@@ -490,15 +594,15 @@ def processar_lote_simples(lote: pd.DataFrame, ai_provider, min_ratio: float, co
     Processa um lote sem usar elementos de UI do Streamlit para evitar conflitos.
     """
     try:
-        # Mapeamento padrão de colunas
-        default_mapping = {
+        # Usar mapeamento do config ou padrão
+        default_mapping = config.get('column_mapping', {
             'title': 'Título',
             'description': 'Descrição', 
             'price': 'Preço',
             'sku': 'SKU',
             'category': 'Categoria',
             'brand': 'Marca'
-        }
+        })
         
         # Adicionar colunas de resultado
         lote['Descrição_Melhorada'] = ''
@@ -524,6 +628,9 @@ def processar_lote_simples(lote: pd.DataFrame, ai_provider, min_ratio: float, co
                     brand=str(row.get(default_mapping.get('brand', 'brand'), '')).strip()
                 )
                 
+                # Limpar título para melhorar a geração de meta tags (igual ao comando manual)
+                product.title = clean_product_title(product.title)
+                
                 # Calcular razão título/descrição
                 title_length = len(product.title)
                 description_length = len(product.description)
@@ -538,11 +645,41 @@ def processar_lote_simples(lote: pd.DataFrame, ai_provider, min_ratio: float, co
                 if should_enhance:
                     streamlit_logger.info(f"Lote {numero_lote} - Melhorando produto {current_index + 1}: {product.title[:50]}...")
                     
-                    # Gerar conteúdo SEO completo
+                    # Gerar conteúdo SEO completo (descrição + meta tags)
                     seo_info = ai_provider.generate_seo_content(product, config)
                     
-                    # Atualizar DataFrame
-                    lote.at[original_index, 'Descrição_Melhorada'] = seo_info.enhanced_description
+                    # Verificar similaridade e tentar retries se necessário (igual ao comando manual)
+                    enhanced = seo_info.enhanced_description or ""
+                    # Criar instância temporária para usar métodos da classe
+                    temp_enhancer = ProductDescriptionEnhancer(ai_provider, 1.5, config)
+                    if temp_enhancer._is_too_similar(enhanced, product.description):
+                        streamlit_logger.warning(f"  Descrição melhorada muito similar à original. Tentando nova geração...")
+                        max_retries = 2
+                        for attempt in range(1, max_retries + 1):
+                            time.sleep(0.5)
+                            candidate = ai_provider.enhance_description(product, config) or ""
+                            if not temp_enhancer._is_too_similar(candidate, product.description):
+                                enhanced = candidate
+                                streamlit_logger.info(f"  Nova variação aceita na tentativa {attempt}")
+                                break
+                        else:
+                            # Fallback baseado em regras para garantir mudança
+                            streamlit_logger.warning("  Mantida alta similaridade após retries. Aplicando fallback baseado em regras.")
+                            enhanced = temp_enhancer._generate_rule_based_description(product)
+                    
+                    # Filtrar conteúdo proibido (igual ao comando manual)
+                    prohibited_phrases = config.get('prohibited_phrases', [])
+                    enhanced = filter_prohibited_content(enhanced, prohibited_phrases, config)
+                    
+                    # Remover números de caixaria (igual ao comando manual)
+                    enhanced = remove_caixaria_numbers(enhanced)
+                    
+                    # Validar comprimento da descrição usando regras dinâmicas (igual ao comando manual)
+                    min_chars, max_chars = get_dynamic_length_limits(product.description, config)
+                    enhanced = ensure_description_length(enhanced, min_chars, max_chars)
+                    
+                    # Atualizar DataFrame com todas as informações
+                    lote.at[original_index, 'Descrição_Melhorada'] = enhanced
                     lote.at[original_index, 'Meta_Title'] = seo_info.meta_title
                     lote.at[original_index, 'Meta_Description'] = seo_info.meta_description
                     lote.at[original_index, 'Status_Melhoria'] = 'MELHORADO'
@@ -550,7 +687,7 @@ def processar_lote_simples(lote: pd.DataFrame, ai_provider, min_ratio: float, co
                 else:
                     streamlit_logger.info(f"Lote {numero_lote} - Mantendo produto {current_index + 1}: {product.title[:50]}...")
                     
-                    # Gerar apenas meta tags
+                    # Gerar apenas meta tags (mesmo quando mantém descrição, gera meta tags)
                     seo_info = ai_provider.generate_seo_content(product, config)
                     
                     lote.at[original_index, 'Descrição_Melhorada'] = product.description
@@ -601,7 +738,7 @@ def dividir_em_lotes(df: pd.DataFrame, tamanho_lote: int = 100):
     
     return lotes
 
-def process_file_in_batches(df: pd.DataFrame, provider: str, api_key: str, model: str, 
+def process_file_in_batches(df: pd.DataFrame, api_key: str, model: str, 
                           min_ratio: float, prohibited_phrases: str, min_chars: int, max_chars: int, tamanho_lote: int = 50):
     """
     Processa arquivo em lotes otimizados para evitar timeouts no Streamlit Cloud.
@@ -619,14 +756,16 @@ def process_file_in_batches(df: pd.DataFrame, provider: str, api_key: str, model
             'description_length': {
                 'min_chars': min_chars,
                 'max_chars': max_chars
-            }
+            },
+            'prompt_settings': {
+                'temperature': temperature,
+                'max_tokens': max_tokens
+            },
+            'column_mapping': column_mapping
         }
         
-        # Criar provedor de IA
-        if provider == "openai":
-            ai_provider = OpenAIProvider(api_key, model)
-        else:
-            ai_provider = GeminiProvider(api_key, model)
+        # Criar provedor de IA (OpenAI)
+        ai_provider = OpenAIProvider(api_key, model)
         
         # Dividir em lotes otimizados
         lotes = dividir_em_lotes(df, tamanho_lote)
@@ -635,12 +774,23 @@ def process_file_in_batches(df: pd.DataFrame, provider: str, api_key: str, model
         st.header("📦 Processamento em Lotes Otimizado")
         st.info(f"📊 Arquivo dividido em {total_lotes} lotes de {tamanho_lote} produtos cada")
         
-        # Calcular tempo estimado mais preciso
-        tempo_por_produto = 0.2 if provider == "openai" and model == "gpt-3.5-turbo" else 0.4
+        # Calcular tempo estimado mais preciso e otimizado
+        if model == "gpt-3.5-turbo":
+            tempo_por_produto = 0.15  # Mais rápido
+        elif model == "gpt-4":
+            tempo_por_produto = 0.3   # Mais lento
+        else:  # gpt-4-turbo
+            tempo_por_produto = 0.25  # Balanceado
+        
         tempo_estimado_total = len(df) * tempo_por_produto
         
+        # Avisar se o tempo estimado é muito longo
+        if tempo_estimado_total > 8:  # Mais de 8 minutos
+            st.warning(f"⚠️ Tempo estimado muito longo: {tempo_estimado_total:.0f} minutos")
+            st.info("💡 Recomendamos usar lotes menores ou modelo mais rápido (gpt-3.5-turbo)")
+        
         st.info(f"⏱️ Tempo estimado total: {tempo_estimado_total:.0f} minutos")
-        st.info(f"🚀 Usando modelo: {model} ({provider})")
+        st.info(f"🚀 Usando modelo: {model} (OpenAI)")
         
         # Mostrar informações dos lotes
         with st.expander("📋 Informações dos Lotes"):
@@ -661,8 +811,37 @@ def process_file_in_batches(df: pd.DataFrame, provider: str, api_key: str, model
             tempo_decorrido = time.time() - tempo_inicio_total
             tempo_restante_estimado = (total_lotes - i + 1) * len(lote) * tempo_por_produto * 60
             
-            if tempo_decorrido > 480:  # 8 minutos (deixar margem de 2 min)
-                st.error("⚠️ Tempo limite próximo! Salvando progresso atual...")
+            # Limite mais conservador para evitar timeout
+            if tempo_decorrido > 360:  # 6 minutos (deixar margem de 4 min)
+                st.warning("⚠️ Tempo limite próximo! Salvando progresso atual...")
+                
+                # Mostrar estatísticas do que foi processado
+                produtos_processados = sum(len(resultado) for resultado in resultados)
+                st.info(f"📊 Produtos processados até agora: {produtos_processados}")
+                st.info(f"📊 Lotes concluídos: {len(resultados)}/{total_lotes}")
+                
+                # Salvar resultado parcial
+                if resultados:
+                    st.subheader("💾 Salvando Resultado Parcial")
+                    resultado_parcial = pd.concat(resultados, ignore_index=True)
+                    
+                    # Criar arquivo Excel em memória
+                    output = io.BytesIO()
+                    with pd.ExcelWriter(output, engine='openpyxl') as writer:
+                        resultado_parcial.to_excel(writer, index=False, sheet_name='Resultados_Parciais')
+                    
+                    output.seek(0)
+                    
+                    st.download_button(
+                        label="📥 Baixar Resultado Parcial",
+                        data=output.getvalue(),
+                        file_name=f"produtos_processados_parcial_{int(time.time())}.xlsx",
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                    )
+                    
+                    st.success(f"✅ {len(resultado_parcial)} produtos processados com sucesso!")
+                    st.info("💡 Para processar o restante, faça upload novamente do arquivo original e processe os lotes restantes.")
+                
                 break
             
             # Criar melhorador para este lote
@@ -690,10 +869,10 @@ def process_file_in_batches(df: pd.DataFrame, provider: str, api_key: str, model
                 
                 st.success(f"✅ Lote {i} concluído! {len(lote_resultado)} produtos processados")
                 
-                # Pausa otimizada entre lotes
+                # Pausa otimizada entre lotes (reduzida para acelerar)
                 if i < total_lotes:
-                    pausa = 3 if tamanho_lote <= 25 else 5  # Pausa menor para lotes pequenos
-                    st.info(f"⏳ Aguardando {pausa} segundos antes do próximo lote...")
+                    pausa = 1 if tamanho_lote <= 25 else 2  # Pausa muito menor
+                    st.info(f"⏳ Aguardando {pausa} segundo(s) antes do próximo lote...")
                     time.sleep(pausa)
                     
                     # Limpar elementos de UI para evitar conflitos
@@ -800,8 +979,9 @@ def process_file_in_batches(df: pd.DataFrame, provider: str, api_key: str, model
         # Resetar estado
         st.session_state.processing = False
 
-def process_file(df: pd.DataFrame, provider: str, api_key: str, model: str, 
-                min_ratio: float, prohibited_phrases: str, min_chars: int, max_chars: int):
+def process_file(df: pd.DataFrame, api_key: str, model: str, 
+                min_ratio: float, prohibited_phrases: str, min_chars: int, max_chars: int,
+                temperature: float, max_tokens: int, column_mapping: dict):
     """Processa o arquivo com feedback visual."""
     
     # Configurar estado
@@ -817,14 +997,16 @@ def process_file(df: pd.DataFrame, provider: str, api_key: str, model: str,
             'description_length': {
                 'min_chars': min_chars,
                 'max_chars': max_chars
-            }
+            },
+            'prompt_settings': {
+                'temperature': temperature,
+                'max_tokens': max_tokens
+            },
+            'column_mapping': column_mapping
         }
         
-        # Criar provedor de IA
-        if provider == "openai":
-            ai_provider = OpenAIProvider(api_key, model)
-        else:
-            ai_provider = GeminiProvider(api_key, model)
+        # Criar provedor de IA (OpenAI)
+        ai_provider = OpenAIProvider(api_key, model)
         
         # Criar melhorador
         enhancer = StreamlitProductEnhancer(ai_provider, min_ratio, config, streamlit_logger)
@@ -843,7 +1025,7 @@ def process_file(df: pd.DataFrame, provider: str, api_key: str, model: str,
         
         # Processar arquivo
         with st.spinner("Processando produtos..."):
-            result_df = enhancer.process_excel_file_streamlit(df)
+            result_df = enhancer.process_excel_file_streamlit(df, column_mapping)
         
         # Atualizar logs finais
         log_container.markdown(f"""

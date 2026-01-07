@@ -1,83 +1,105 @@
 {
-    "openai_model": "gpt-3.5-turbo",
-    "gemini_model": "gemini-pro",
-    "default_ratio": 1.5,
-    "column_mapping": {
-        "title": "Título",
-        "description": "Descrição",
-        "price": "Preço",
-        "sku": "SKU",
-        "category": "Categoria",
-        "brand": "Marca"
+  "openai_model": "gpt-3.5-turbo",
+  "default_ratio": 1.5,
+  "column_mapping": {
+    "title": "Título",
+    "description": "Descrição",
+    "price": "Preço",
+    "sku": "SKU",
+    "category": "Categoria",
+    "brand": "Marca"
+  },
+  "prompt_settings": {
+    "max_tokens": 500,
+    "temperature": 0.7,
+    "description_length_min": 150,
+    "description_length_max": 300
+  },
+  "seo_settings": {
+    "meta_title_max_length": 60,
+    "meta_title_min_length": 50,
+    "meta_description_max_length": 160,
+    "meta_description_min_length": 140,
+    "compra_agora_rules": {
+      "meta_title_format": "Nome Produto | Marca - Compra Agora",
+      "compra_agora_suffix": "- Compra Agora",
+      "compra_agora_suffix_length": 15,
+      "keyword_position": "inicio",
+      "brand_position": "final",
+      "avoid_keyword_stuffing": true,
+      "mandatory_suffix": true,
+      "description_elaboration": true
     },
-    "prompt_settings": {
-        "max_tokens": 500,
-        "temperature": 0.7,
-        "description_length_min": 150,
-        "description_length_max": 300
+    "niara_preset": {
+      "meta_title_structure": "tema/título + palavra-chave + audiência + tom de voz",
+      "meta_description_structure": "tema/título + palavra-chave + audiência + call_to_action + tom de voz"
     },
-    "seo_settings": {
-        "meta_title_max_length": 60,
-        "meta_title_min_length": 50,
-        "meta_description_max_length": 160,
-        "meta_description_min_length": 140,
-        "compra_agora_rules": {
-            "meta_title_format": "Nome Produto | Marca - Compra Agora",
-            "compra_agora_suffix": "- Compra Agora",
-            "compra_agora_suffix_length": 15,
-            "keyword_position": "inicio",
-            "brand_position": "final",
-            "avoid_keyword_stuffing": true,
-            "mandatory_suffix": true,
-            "description_elaboration": true
-        },
-        "niara_preset": {
-            "meta_title_structure": "tema/título + palavra-chave + audiência + tom de voz",
-            "meta_description_structure": "tema/título + palavra-chave + audiência + call_to_action + tom de voz"
-        },
-        "call_to_actions": [
-            "Compre agora",
-            "Descubra",
-            "Veja modelos exclusivos",
-            "Experimente",
-            "Aproveite",
-            "Sinta a diferença"
-        ],
-        "benefits_keywords": [
-            "Edição limitada",
-            "Feito à mão",
-            "Qualidade premium",
-            "Exclusivo",
-            "Especial",
-            "Tecnologia avançada",
-            "Sabor premium",
-            "Proteção duradoura",
-            "Performance excepcional"
-        ],
-        "validation_rules": {
-            "enforce_compra_agora_suffix": true,
-            "min_description_elaboration": true,
-            "include_compra_agora_in_description": true,
-            "auto_correct_format": true
-        }
-    },
-    "prohibited_phrases": [
-        "margem",
-        "lucro",
-        "margem de lucro",
-        "clientes frescos"
+    "call_to_actions": [
+      "Compre agora",
+      "Descubra",
+      "Veja modelos exclusivos",
+      "Experimente",
+      "Aproveite",
+      "Sinta a diferença"
     ],
-    "description_length": {
-        "dynamic_rules": true,
-        "short_description": {
-            "threshold": 300,
-            "min_chars": 300,
-            "max_chars": 400
-        },
-        "long_description": {
-            "threshold": 300,
-            "min_chars": 300,
-            "max_chars": 800
-        }
+    "benefits_keywords": [
+      "Edição limitada",
+      "Feito à mão",
+      "Qualidade premium",
+      "Exclusivo",
+      "Especial",
+      "Tecnologia avançada",
+      "Sabor premium",
+      "Proteção duradoura",
+      "Performance excepcional"
+    ],
+    "validation_rules": {
+      "enforce_compra_agora_suffix": true,
+      "min_description_elaboration": true,
+      "include_compra_agora_in_description": true,
+      "auto_correct_format": true,
+      "remove_caixaria_numbers": true,
+      "_comment_caixaria": "Remove números de caixaria das descrições (ex: 'Caixa com 1' → 'Caixa')"
     }
+  },
+  "prohibited_phrases": [
+    "margem",
+    "clientes frescos",
+    "Delicie seus clientes",
+    "validade",
+    "pequenos clientes",
+    "mercadinho",
+    "faturamento",
+    "estoque",
+    "aumentar vendas",
+    "impulsionar vendas",
+    "prazo de validade"
+  ],
+  "substitution_mapping": {
+    "_comment": "Mapeamento opcional de substituições. Se não especificado, usa valores padrão do código.",
+    "_note": "Ordem importa: frases completas são aplicadas antes de palavras individuais",
+    "margem de lucro": "rentabilidade",
+    "pequenos clientes": "clientes",
+    "clientes frescos": "clientes",
+    "Delicie seus clientes": "Satisfaça seus clientes",
+    "mercadinho": "estabelecimento",
+    "validade": "prazo de validade",
+    "faturamento": "receita",
+    "estoque": "disponibilidade",
+    "margem": "rentabilidade",
+    "lucro": "rentabilidade"
+  },
+  "description_length": {
+    "dynamic_rules": true,
+    "short_description": {
+      "threshold": 300,
+      "min_chars": 200,
+      "max_chars": 350
+    },
+    "long_description": {
+      "threshold": 300,
+      "min_chars": 300,
+      "max_chars": 800
+    }
+  }
 }

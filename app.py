@@ -316,7 +316,7 @@ def main():
         st.subheader("🔑 OpenAI API Key")
         
         # Tentar carregar do .env primeiro
-        default_key = os.getenv('OPENAI_API_KEY', '')
+        default_key = "COLE_A_SUA_OPENAI_API_KEY_AQUI"
         
         api_key = st.text_input(
             "Insira sua API Key da OpenAI",
